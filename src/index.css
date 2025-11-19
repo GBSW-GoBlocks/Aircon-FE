@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+/* 스크롤바 스타일링 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+/* 더 투명한 버전 */
+::-webkit-scrollbar-track {
+  background: rgba(229, 231, 235, 0.1);
+  border-radius: 10px; /* 둥글게 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.4);
+  border-radius: 10px; /* 둥글게 */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 114, 128, 0.6);
+}
