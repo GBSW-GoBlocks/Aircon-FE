@@ -29,7 +29,7 @@ const isMobileDevice = () => {
   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
 }
 
-export default function Etherium({ setAccount, setSigner, setProvider, setContract }) {
+export default function Etherium({ setAccount, setSigner, setProvider, setContract, setAddAirconLog }) {
   const [connected, setConnected] = useState(false)
   const [account, setLocalAccount] = useState("")
   const [airconLogs, setAirconLogs] = useState([])
@@ -39,6 +39,7 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
 
   const cleanupEventsRef = useRef(null)
   const wsProviderRef = useRef(null)
+  const processedTxsRef = useRef(new Set())
 
   const showNotificationMessage = (message, type = "info") => {
     setShowNotification({ message, type })
@@ -47,48 +48,23 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
     setTimeout(() => setShowNotification(""), 7500)
   }
 
-  const addAirconLog = useCallback((message, type = "info", txHash = null) => {
+  const addAirconLog = useCallback((message, type = "info", txHash = null, userMessage = null, fromAddress = null) => {
     const newLog = {
       id: Date.now() + Math.random(),
       message,
       type,
       timestamp: new Date().toLocaleTimeString("ko-KR"),
       txHash,
+      userMessage,
+      fromAddress,
+      isOwnTransaction: fromAddress && account ? fromAddress.toLowerCase() === account.toLowerCase() : false
     }
     setAirconLogs(prev => [...prev.slice(-50), newLog])
+  }, [account])
+
+  useEffect(() => {
+    setAddAirconLog(addAirconLog);
   }, [])
-
-  const setupEventListener = useCallback((contract) => {
-    if (!contract || cleanupEventsRef.current) return
-
-    const handler = (...args) => {
-      const event = args[args.length - 1]
-      if (!event?.event || !event.transactionHash) return
-
-      const { event: name, args: eventArgs, transactionHash } = event
-
-      if (airconLogs.some(log => log.txHash === transactionHash)) return
-
-      const descMap = {
-        ChangedAirconTemp: `온도 변경 → ${eventArgs[0]}°C`,
-        ChangeAirconPower: `팬 속도 → ${["약", "중", "강"][Number(eventArgs[0])] || eventArgs[0]}`,
-        ChangeAirconMod: `모드 → ${eventArgs[0] === 0n ? "냉방" : "난방"}`,
-        ChangeAirconStatus: `전원 → ${eventArgs[0] === 1n ? "ON" : "OFF"}`,
-      }
-
-      const message = descMap[name] || `${name} 발생`
-      addAirconLog(message, "success", transactionHash)
-      showNotificationMessage(message, "success")
-      window.refreshAirconStatus?.()
-    }
-
-    contract.on("*", handler)
-    addAirconLog("실시간 이벤트 감시 시작 (WebSocket)", "success")
-
-    cleanupEventsRef.current = () => {
-      contract.removeListener("*", handler)
-    }
-  }, [addAirconLog, airconLogs])
 
   const connectWallet = async () => {
     if (isMobileDevice() && !window.ethereum) {
@@ -151,9 +127,9 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
         wsProviderRef.current = wsProvider
 
         wsProvider.on("error", (error) => {
-          console.warn("WebSocket 에러:", error);
-          addAirconLog("WebSocket 연결 불안정 (HTTP polling으로 전환)", "info");
-        });
+          console.warn("WebSocket 에러:", error)
+          addAirconLog("WebSocket 연결 불안정 (HTTP polling으로 전환)", "info")
+        })
 
         eventContract = new ethers.Contract(
           AIRCON_CONTRACT.address,
@@ -174,17 +150,19 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
 
       setContract(writeContract)
 
+      // 이벤트 리스너 정리 후 설정
       if (cleanupEventsRef.current) cleanupEventsRef.current()
-      setupEventListener(eventContract || writeContract)
-
       setLocalAccount(address)
       setAccount(address)
       setSigner(signer)
       setProvider(ethProvider)
       setConnected(true)
 
+      // 트랜잭션 처리 Set 초기화
+      processedTxsRef.current = new Set()
+
       addAirconLog(`지갑 연결: ${address.slice(0, 6)}...${address.slice(-4)}`, "success")
-      addAirconLog(`${balanceStr === "0.0000" ? "MetaMask를 다시 실행해주세요." : `잔액: ${balanceStr} BNB ETH`}`, "info")
+      addAirconLog(`${balanceStr === "0.0000" ? "MetaMask를 다시 실행해주세요." : `잔액: ${balanceStr} BNB`}`, "info")
       showNotificationMessage("연결 완료!", "success")
 
     } catch (err) {
@@ -202,10 +180,10 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
   }
 
   useEffect(() => {
-    window.addPendingTx = (hash, desc) => {
+    window.addPendingTx = (hash, desc, message) => {
       const id = Date.now()
       setPendingTxs(prev => [...prev, { id, hash, desc }])
-      addAirconLog(`트랜잭션 전송: ${desc}`, "pending", hash)
+      addAirconLog(`트랜잭션 전송: ${desc}`, "pending", hash, message)
 
       setProvider(prevProvider => {
         if (!prevProvider) return prevProvider
@@ -213,7 +191,7 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
         prevProvider.waitForTransaction(hash).then(receipt => {
           setPendingTxs(prev => prev.filter(t => t.id !== id))
           if (receipt.status === 1) {
-            addAirconLog(`성공: ${desc}`, "success", hash)
+            addAirconLog(`성공: ${desc}`, "success", hash, message)
             showNotificationMessage(`완료: ${desc}`, "success")
           } else {
             addAirconLog(`실패: ${desc}`, "error", hash)
@@ -290,31 +268,54 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
               <div className="p-3 max-h-92 overflow-y-auto">
                 <div className="flex justify-between mb-2">
                   <span className="text-xs font-medium text-gray-300">이벤트 로그</span>
-                  <button onClick={() => setAirconLogs([])} className="text-xs text-gray-400 hover:text-white">지우기</button>
+                  <button
+                    onClick={() => {
+                      setAirconLogs([])
+                      processedTxsRef.current = new Set()
+                    }}
+                    className="text-xs text-gray-400 hover:text-white"
+                  >
+                    지우기
+                  </button>
                 </div>
                 {airconLogs.length === 0 ? (
                   <p className="text-center text-gray-400 text-xs py-8">이벤트 대기중...</p>
                 ) : (
                   <div className="space-y-2">
                     {airconLogs.slice(-20).reverse().map(log => (
-                      <div key={log.id} className="flex items-start gap-2 text-xs p-2 bg-white/5 rounded">
-                        <div className={`w-2 h-2 rounded-full mt-1 ${log.type === "success" ? "bg-green-500" :
+                      <div
+                        key={log.id}
+                        className={`flex items-start gap-2 text-xs p-2 rounded ${log.type === "other"
+                          ? 'bg-blue-900/30 border border-blue-700/30'
+                          : 'bg-white/5'
+                          }`}
+                      >
+                        <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${log.type === "success" ? "bg-green-500" :
                           log.type === "error" ? "bg-red-500" :
-                            log.type === "pending" ? "bg-yellow-500 animate-pulse" : "bg-blue-500"
+                            log.type === "pending" ? "bg-yellow-500 animate-pulse" :
+                              log.type === "other" ? "bg-blue-400" : "bg-blue-500"
                           }`} />
-                        <div className="flex-1">
-                          <p>{log.message}</p>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium">{log.message}</p>
+                          {log.userMessage && (
+                            <p className="text-cyan-300 mt-1 italic break-words">"{log.userMessage}"</p>
+                          )}
+                          {log.fromAddress && log.type === "other" && (
+                            <p className="text-gray-400 text-xs mt-1">
+                              From: {log.fromAddress.slice(0, 6)}...{log.fromAddress.slice(-4)}
+                            </p>
+                          )}
                           {log.txHash && (
                             <a
                               href={`https://testnet.bscscan.com/tx/${log.txHash}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-blue-400 text-xs break-all hover:underline"
+                              className="text-blue-400 text-xs break-all hover:underline block mt-1"
                             >
                               Tx: {log.txHash.slice(0, 10)}...{log.txHash.slice(-8)}
                             </a>
                           )}
-                          <p className="text-gray-500 text-xs">{log.timestamp}</p>
+                          <p className="text-gray-500 text-xs mt-1">{log.timestamp}</p>
                         </div>
                       </div>
                     ))}
@@ -359,7 +360,10 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="font-bold">실시간 이벤트 로그</h3>
                   <button
-                    onClick={() => setAirconLogs([])}
+                    onClick={() => {
+                      setAirconLogs([])
+                      processedTxsRef.current = new Set()
+                    }}
                     className="text-xs text-gray-400 hover:text-white"
                   >
                     모두 지우기
@@ -373,20 +377,35 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
                 ) : (
                   <div className="space-y-3">
                     {airconLogs.slice(-15).reverse().map(log => (
-                      <div key={log.id} className="p-2 bg-white/10 rounded-md border border-white/10">
+                      <div
+                        key={log.id}
+                        className={`p-2 rounded-md border ${log.type === "other"
+                          ? 'bg-blue-900/30 border-blue-700/40'
+                          : 'bg-white/10 border-white/10'
+                          }`}
+                      >
                         <div className="flex items-start gap-3">
-                          <div className={`w-2 h-2 rounded-full mt-0.5 ${log.type === "success" ? "bg-green-500" :
+                          <div className={`w-2 h-2 rounded-full mt-0.5 flex-shrink-0 ${log.type === "success" ? "bg-green-500" :
                             log.type === "error" ? "bg-red-500" :
-                              log.type === "pending" ? "bg-yellow-500 animate-pulse" : "bg-blue-500"
+                              log.type === "pending" ? "bg-yellow-500 animate-pulse" :
+                                log.type === "other" ? "bg-blue-400" : "bg-blue-500"
                             }`} />
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <p className="font-medium text-xs">{log.message}</p>
+                            {log.userMessage && (
+                              <p className="text-cyan-300 text-xs mt-1 italic break-words">"{log.userMessage}"</p>
+                            )}
+                            {log.fromAddress && log.type === "other" && (
+                              <p className="text-gray-400 text-xs mt-1">
+                                From: {log.fromAddress.slice(0, 6)}...{log.fromAddress.slice(-4)}
+                              </p>
+                            )}
                             {log.txHash && (
                               <a
                                 href={`https://testnet.bscscan.com/tx/${log.txHash}`}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-blue-400 text-xs hover:underline break-all"
+                                className="text-blue-400 text-xs hover:underline break-all block mt-1"
                               >
                                 {log.txHash.slice(0, 12)}...{log.txHash.slice(-10)}
                               </a>
@@ -403,11 +422,11 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
           </div>
 
           {showNotification && (
-            <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-md shadow-md transition-all duration-300 ${visible ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0"
+            <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-50 px-4 py-3 rounded-md shadow-md transition-all duration-300 max-w-sm ${visible ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0"
               } ${showNotification.type === "success" ? "bg-green-500" :
                 showNotification.type === "error" ? "bg-red-600" : "bg-blue-600"
               }`}>
-              <p className="font-semibold text-white text-sm">{showNotification.message}</p>
+              <p className="font-semibold text-white text-sm whitespace-pre-line">{showNotification.message}</p>
             </div>
           )}
         </div>

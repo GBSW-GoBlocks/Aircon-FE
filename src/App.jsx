@@ -13,15 +13,19 @@ function App() {
   const [contract, setContract] = useState(null)
   const [showRemote, setShowRemote] = useState(false);
   const [provider, setProvider] = useState(null);
+  const [addAirconLog, setAddAirconLog] = useState(null);
 
   const { setStatus, setTemperature, setPower } = useAircon();
 
-  const handleStatusUpdate = useCallback(({ temperature, status, power }) => {
+  const handleStatusUpdate = useCallback(({ temperature, status, power, message }) => {
+    console.info("CALLED")
     if (power == undefined || status == undefined || temperature == undefined || isNaN(temperature)) return;
     setTemperature(temperature);
     setStatus(status);
     setPower(power);
-  }, [setTemperature, setStatus, setPower]);
+    if (!addAirconLog) return;
+    addAirconLog(`감지됨`, "success", "1234", message)
+  }, [setTemperature, setStatus, setPower, addAirconLog]);
 
   const device = useScreenType().isMobile
 
@@ -59,7 +63,7 @@ function App() {
               contract={contract}
               account={account}
               onStatusUpdate={handleStatusUpdate}
-              provider={provider} 
+              provider={provider}
             />
           </div>
           <div className={`bg-black/60 backdrop-blur-md text-white rounded-lg shadow-lg border border-gray-700 p-4 ${showRemote ? "opacity-0 pointer-events-none h-0" : "opacity-100"}`}>
@@ -102,6 +106,7 @@ function App() {
             setSigner={setSigner}
             setProvider={setProvider}
             setContract={setContract}
+            setAddAirconLog={setAddAirconLog}
           />
         </div>
       </div>
