@@ -14,18 +14,27 @@ function App() {
   const [showRemote, setShowRemote] = useState(false);
   const [provider, setProvider] = useState(null);
   const [addAirconLog, setAddAirconLog] = useState(null);
+  const { setStatus, setTemperature, setPower, setMode } = useAircon();
 
-  const { setStatus, setTemperature, setPower } = useAircon();
+  const handleStatusUpdate = useCallback(({ temperature, status, power, mode }) => {
+    if (temperature == null || status == null || power == null) return;
 
-  const handleStatusUpdate = useCallback(({ temperature, status, power, message }) => {
-    console.info("CALLED")
-    if (power == undefined || status == undefined || temperature == undefined || isNaN(temperature)) return;
     setTemperature(temperature);
     setStatus(status);
     setPower(power);
-    if (!addAirconLog) return;
-    addAirconLog(`감지됨`, "success", "1234", message)
-  }, [setTemperature, setStatus, setPower, addAirconLog]);
+    if (mode != null) setMode(mode);
+
+    console.info("Updating")
+
+    if (addAirconLog) {
+      let action = "";
+      if (status === 1) action = "에어컨 켜짐";
+      else if (status === 0) action = "에어컨 꺼짐";
+      else if (temperature !== undefined) action = `온도 ${temperature}°C`;
+
+      addAirconLog(action, "success");
+    }
+  }, [setTemperature, setStatus, setPower, setMode, addAirconLog]);
 
   const device = useScreenType().isMobile
 
@@ -55,7 +64,6 @@ function App() {
             </button>
           </div>
         </div>
-
         {/* 메인 컨텐츠 */}
         <div className="transition-all duration-300 overflow-hidden">
           <div className={`flex justify-center ${showRemote ? "opacity-100" : "opacity-0 pointer-events-none h-0"}`}>
@@ -72,6 +80,7 @@ function App() {
               setSigner={setSigner}
               setProvider={setProvider}
               setContract={setContract}
+              setAddAirconLog={setAddAirconLog}
             />
           </div>
         </div>
@@ -113,5 +122,4 @@ function App() {
     )
   );
 }
-
 export default App;

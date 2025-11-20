@@ -1,15 +1,14 @@
-"use client"
 import { useState, useEffect, useCallback } from "react"
 import { ethers } from "ethers"
 import { Power, Fan, ChevronUp, ChevronDown, X } from "lucide-react"
+import { useAircon } from "../context/AirconContext"
 
 export default function AirconRemote({ contract, account, className, onStatusUpdate, provider }) {
-  const [temperature, setTemperature] = useState(25)
-  const [mod, setMod] = useState("ice")
-  const [status, setStatus] = useState(0)
-  const [power, setPower] = useState(1)
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+
+  // Context에서 모든 상태 가져오기
+  const { status, setStatus, temperature, setTemperature, power, setPower, mode, setMode } = useAircon();
 
   // 메시지 입력 관련 상태
   const [showMessageInput, setShowMessageInput] = useState(false)
@@ -22,30 +21,37 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
     try {
       setIsLoading(true)
 
-      console.info(contract.airconTemp)
-      const [temp, statusValue, powerValue] = await Promise.all([
+      const [temp, statusValue, powerValue, modValue] = await Promise.all([
         contract.airconTemp(),
         contract.airconStatus(),
         contract.airconPower(),
+        contract.airconMod(),
       ])
 
       const parsedTemp = Number(temp)
       const parsedStatus = Number(statusValue)
       const parsedPower = Number(powerValue)
+      const parsedMode = Number(modValue)
 
       setTemperature(parsedTemp)
       setStatus(parsedStatus)
       setPower(parsedPower)
+      setMode(parsedMode)
       setIsConnected(true)
 
-      onStatusUpdate?.({ temperature: parsedTemp, status: parsedStatus, power: parsedPower })
+      onStatusUpdate?.({
+        temperature: parsedTemp,
+        status: parsedStatus,
+        power: parsedPower,
+        mode: parsedMode
+      })
     } catch (err) {
       console.error("상태 조회 실패:", err)
       setIsConnected(false)
     } finally {
       setIsLoading(false)
     }
-  }, [contract, onStatusUpdate])
+  }, [contract, onStatusUpdate, setTemperature, setStatus, setPower, setMode])
 
   const sendTx = async (fnName, args, desc) => {
     if (!contract || !provider || !account) {
@@ -65,6 +71,7 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
         } catch (error) {
           console.warn(`airconCost 실패 (${attempt + 1}/3)`)
           if (attempt === 2) {
+            // 마지막 시도 실패
           } else {
             await new Promise(r => setTimeout(r, 300))
           }
@@ -92,7 +99,7 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
 
         const errMsg = estimateError.message?.toLowerCase() || ""
         if (errMsg.includes("revert") || errMsg.includes("execution reverted")) {
-          alert("컨트랙트가 거부했습니다.\n\n가능한 원인:\n- 이미 해당 상태알 수 있습니다.\n- 확장 프로그램 / 애플리케이션이 실행중이지 않습니다.")
+          alert("컨트랙트가 거부했습니다.\n\n가능한 원인:\n- 이미 해당 상태입니다.\n- 확장 프로그램 / 애플리케이션이 실행중이지 않습니다.")
           return
         }
       }
@@ -148,47 +155,34 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
   const executeWithMessage = async (message) => {
     setShowMessageInput(false)
     setMessageText("")
+    const currentAction = pendingAction
     setPendingAction(null)
-    if (!pendingAction) return
 
-    console.info("=== executeWithMessage 시작 ===")
-    console.info("입력된 메시지:", message)
-    console.info("pendingAction:", pendingAction)
-
-    const { action } = pendingAction
+    if (!currentAction) return
+    const { action } = currentAction
 
     switch (action) {
       case "turnOn":
-        console.info("전송될 args:", [1, message || "전원 ON"])
         await sendTx("changeAirconStatus", [1, message || "전원 ON"], "에어컨 켜기")
         break
       case "turnOff":
-        console.info("전송될 args:", [0, message || "전원 OFF"])
         await sendTx("changeAirconStatus", [0, message || "전원 OFF"], "에어컨 끄기")
         break
       case "increaseTemp":
-        console.info("전송될 args:", [0, message || "온도 증가"])
         await sendTx("changeAirconTemp", [0, message || "온도 증가"], "온도 +1")
         break
       case "decreaseTemp":
-        console.info("전송될 args:", [1, message || "온도 감소"])
         await sendTx("changeAirconTemp", [1, message || "온도 감소"], "온도 -1")
         break
       case "changeMode":
-        const nextMod = mod === "ice" ? 1 : 0
-        console.info("전송될 args:", [nextMod, message || (nextMod === 1 ? "난방" : "냉방")])
-        await sendTx("changeAirconMod", [nextMod, message || (nextMod === 1 ? "난방" : "냉방")], "모드 변경")
+        const nextMode = mode === 0 ? 1 : 0
+        await sendTx("changeAirconMod", [nextMode, message || (nextMode === 1 ? "난방" : "냉방")], "모드 변경")
         break
       case "changeFan":
         const nextPower = power >= 2 ? 0 : power + 1
-        console.info("전송될 args:", [nextPower, message || `팬 ${["약", "중", "강"][nextPower]}`])
         await sendTx("changePower", [nextPower, message || `팬 ${["약", "중", "강"][nextPower]}`], `팬 속도 변경`)
         break
     }
-    // 초기화
-    setShowMessageInput(false)
-    setMessageText("")
-    setPendingAction(null)
   }
 
   const controlAircon = async (action) => {
@@ -331,7 +325,7 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
             {status ? `${temperature}°C` : " --°C"}
           </div>
           <div className="text-xs text-cyan-300/80 mt-1">
-            {status ? (mod === "ice" ? "COOL" : "HEAT") : "OFF"}
+            {status ? (mode === 0 ? "COOL" : "HEAT") : "OFF"}
           </div>
           {status && (
             <div className="text-xs text-blue-300/80 mt-1">
@@ -373,15 +367,15 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
             onClick={changeMode}
             disabled={!status || !isConnected}
             className={`p-4 button-glass rounded-xl flex items-center justify-center transition-all duration-300 active:scale-95 shadow-lg border disabled:opacity-30 disabled:cursor-not-allowed ${status
-              ? (mod === "hot"
-                ? "bg-blue-500/30 hover:bg-blue-500/50 border-blue-400/30 hover:border-blue-400/50 hover:shadow-blue-500/25"
-                : "bg-orange-500/30 hover:bg-orange-500/50 border-orange-400/30 hover:border-orange-400/50 hover:shadow-orange-500/25"
+              ? (mode === 1
+                ? "bg-orange-500/30 hover:bg-orange-500/50 border-orange-400/30 hover:border-orange-400/50 hover:shadow-orange-500/25"
+                : "bg-blue-500/30 hover:bg-blue-500/50 border-blue-400/30 hover:border-blue-400/50 hover:shadow-blue-500/25"
               ) + " text-white"
               : "bg-white/10 hover:bg-white/20 border-white/10 hover:border-white/20 text-gray-300"
               }`}
           >
             <div className="text-xs font-bold drop-shadow-lg">
-              {mod === "hot" ? "COOL" : "HEAT"}
+              {mode === 1 ? "HEAT" : "COOL"}
             </div>
           </button>
 

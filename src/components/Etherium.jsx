@@ -1,8 +1,8 @@
-"use client"
 import { useEffect, useState, useCallback, useRef } from "react"
 import { ethers, WebSocketProvider } from "ethers"
 import ABI from "../assets/ABI.json"
 import useScreenType from "react-screentype-hook"
+import { useAircon } from "../context/AirconContext"
 
 // 컨트랙트 주소
 const AIRCON_CONTRACT = {
@@ -29,7 +29,7 @@ const isMobileDevice = () => {
   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
 }
 
-export default function Etherium({ setAccount, setSigner, setProvider, setContract, setAddAirconLog }) {
+export default function Etherium({ setAccount, setSigner, setProvider, setContract, setAddAirconLog, currentTemp, setCurrentTemp }) {
   const [connected, setConnected] = useState(false)
   const [account, setLocalAccount] = useState("")
   const [airconLogs, setAirconLogs] = useState([])
@@ -40,6 +40,8 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
   const cleanupEventsRef = useRef(null)
   const wsProviderRef = useRef(null)
   const processedTxsRef = useRef(new Set())
+
+  const { status, setStatus, temperature, setTemperature, power, setPower, mode, setMode } = useAircon();
 
   const showNotificationMessage = (message, type = "info") => {
     setShowNotification({ message, type })
@@ -137,9 +139,109 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
           wsProvider
         )
 
+        if (wsProvider) {
+          console.info("✅ WebSocket Provider 생성됨")
+
+          wsProvider.on("error", (error) => {
+            console.error("❌ WebSocket 에러:", error)
+            addAirconLog("WebSocket 연결 불안정", "error")
+          })
+
+          wsProvider.on("close", () => {
+            console.warn("⚠️ WebSocket 연결 끊김")
+          })
+
+          // 연결 테스트
+          wsProvider.getBlockNumber().then(blockNum => {
+            console.info("✅ WebSocket 연결 확인, 현재 블록:", blockNum)
+          }).catch(err => {
+            console.error("❌ WebSocket 연결 실패:", err)
+          })
+        }
+
       } catch (wsError) {
         console.warn("WebSocket 연결 실패, HTTP polling 사용:", wsError.message)
         addAirconLog(`WebSocket 연결 실패 (HTTP polling 사용): ${wsError.message}`, "info")
+      }
+
+      if (ethProvider && eventContract) {
+        console.info("✅ 이벤트 리스너 등록 시작")
+
+        eventContract.on("*", async (event) => {
+          try {
+            console.info("📡 이벤트 감지:", event)
+
+            const method = event.fragment.name;
+            const txHash = event.log.transactionHash;
+
+            // 트랜잭션 발신자 주소 가져오기
+            let txFrom = null;
+            try {
+              const tx = await ethProvider.getTransaction(txHash);
+              txFrom = tx?.from || null;
+            } catch (e) {
+              console.warn("트랜잭션 조회 실패:", e);
+            }
+
+            // 내 트랜잭션이면 무시 (addPendingTx에서 이미 처리됨)
+            if (txFrom && account && txFrom.toLowerCase() === account.toLowerCase()) {
+              console.info("내 트랜잭션이므로 무시");
+              return;
+            }
+
+            let action = "";
+            let displayMessage = "";
+
+            switch (method) {
+              case 'ChangedAirconTemp':
+                const temp = Number(event.args[0]);
+                displayMessage = event.args[1];
+                action = `온도 ${temp}°C로 변경`;
+                setTemperature(temp);
+                break;
+
+              case 'ChangeAirconStatus':
+                const statusValue = Number(event.args[0]);
+                displayMessage = event.args[1];
+                action = statusValue === 1 ? "에어컨 켜짐" : "에어컨 꺼짐";
+                setStatus(statusValue);
+                break;
+
+              case 'ChangeAirconMod':
+                const modValue = Number(event.args[0]);
+                displayMessage = event.args[1];
+                action = modValue === 0 ? "냉방 모드로 변경" : "난방 모드로 변경";
+                setMode(modValue);
+                break;
+
+              case 'ChangeAirconPower':
+                const powerStr = event.args[0]; // 'weak', 'medium', 'strong'
+                displayMessage = event.args[1];
+                const powerMap = { 'weak': 0, 'medium': 1, 'power': 2 };
+                const powerNameMap = { 'weak': "약", 'medium': "중", 'power': "강" };
+                action = `풍속 ${powerNameMap[powerStr] || powerStr}으로 변경`;
+                setPower(powerMap[powerStr] ?? 0);
+                break;
+              default:
+                action = "알 수 없는 조작";
+            }
+
+            console.info("처리된 이벤트:", { method, action, displayMessage, txFrom });
+
+            addAirconLog(
+              action,
+              "other",
+              txHash,
+              displayMessage,
+              txFrom
+            );
+
+          } catch (error) {
+            console.error("이벤트 처리 실패:", error);
+          }
+        });
+
+        console.info("✅ 이벤트 리스너 등록 완료")
       }
 
       const writeContract = new ethers.Contract(
@@ -150,8 +252,6 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
 
       setContract(writeContract)
 
-      // 이벤트 리스너 정리 후 설정
-      if (cleanupEventsRef.current) cleanupEventsRef.current()
       setLocalAccount(address)
       setAccount(address)
       setSigner(signer)
@@ -164,7 +264,6 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
       addAirconLog(`지갑 연결: ${address.slice(0, 6)}...${address.slice(-4)}`, "success")
       addAirconLog(`${balanceStr === "0.0000" ? "MetaMask를 다시 실행해주세요." : `잔액: ${balanceStr} BNB`}`, "info")
       showNotificationMessage("연결 완료!", "success")
-
     } catch (err) {
       console.error("연결 실패:", err)
 

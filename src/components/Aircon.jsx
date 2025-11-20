@@ -1,5 +1,3 @@
-"use client"
-
 import { useEffect, useRef } from "react"
 import { Wifi } from "lucide-react"
 import { useAircon } from "../context/AirconContext"
