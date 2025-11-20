@@ -12,7 +12,7 @@ export default function WallMountedAirConditioner() {
   const beepSoundRef = useRef(null)
   const prevStatusRef = useRef(status)
   const prevPowerRef = useRef(power)
-  const prevTemperatureRef = useRef(temperature) 
+  const prevTemperatureRef = useRef(temperature)
 
   // 사운드 재생 함수
   const playSound = (audioRef, volume = 0.5, loop = false) => {
@@ -34,7 +34,7 @@ export default function WallMountedAirConditioner() {
   // 작동음 재시작 함수
   const restartRunningSound = () => {
     if (status && runningSoundRef.current) {
-      const volume = power === "강" ? 0.4 : power === "중" ? 0.25 : 0.15
+      const volume = power === 2 ? 0.4 : power === 1 ? 0.25 : 0.15
       playSound(runningSoundRef, volume, true)
     }
   }
@@ -43,6 +43,7 @@ export default function WallMountedAirConditioner() {
   useEffect(() => {
     const powerChanged = prevStatusRef.current !== status
     const fanOrTempChanged = prevPowerRef.current !== power || prevTemperatureRef.current !== temperature
+
     // 1. 전원 상태가 바뀐 경우
     if (powerChanged) {
       if (status) {
@@ -69,7 +70,7 @@ export default function WallMountedAirConditioner() {
     }
     // 3. 전원 켜진 상태에서 풍량이나 온도에 따른 볼륨 조정 (변경 없을 때)
     else if (status && runningSoundRef.current && !fanOrTempChanged) {
-      const volume = power === "강" ? 0.4 : power === "중" ? 0.25 : 0.15
+      const volume = power === 2 ? 0.4 : power === 1 ? 0.25 : 0.15
       runningSoundRef.current.volume = volume
     }
 
@@ -92,13 +93,13 @@ export default function WallMountedAirConditioner() {
   const getShakeIntensity = () => {
     const tempDiff = Math.abs(25 - temperature)
     const tempFactor = tempDiff / 7
-    const fanFactor = status ? (power === "강" ? 1 : power === "중" ? 0.6 : 0.3) : 0
+    const fanFactor = status ? (power === 2 ? 1 : power === 1 ? 0.6 : 0.3) : 0
     return tempFactor * fanFactor
   }
 
   const getWindIntensity = () => {
     if (!status) return 0
-    const basePower = power === "강" ? 1 : power === "중" ? 0.6 : 0.3
+    const basePower = power === 2 ? 1 : power === 1 ? 0.6 : 0.3
     const tempBoost = Math.abs(25 - temperature) / 10 // 25도에서 멀어질수록 더 강하게
     return Math.min(basePower + tempBoost, 1.5) // 최대 1.5배
   }
@@ -123,7 +124,7 @@ export default function WallMountedAirConditioner() {
 
   const getParticleCount = () => {
     if (!status) return 0
-    const baseCount = power === "강" ? 20 : power === "중" ? 12 : 8
+    const baseCount = power === 2 ? 20 : power === 1 ? 12 : 8
     const tempMultiplier = 1 + Math.abs(25 - temperature) / 20 // 온도차이에 따른 배수
     return Math.floor(baseCount * tempMultiplier)
   }

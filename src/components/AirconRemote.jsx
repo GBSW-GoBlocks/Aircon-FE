@@ -7,20 +7,16 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
-  // Context에서 모든 상태 가져오기
   const { status, setStatus, temperature, setTemperature, power, setPower, mode, setMode } = useAircon();
 
-  // 메시지 입력 관련 상태
   const [showMessageInput, setShowMessageInput] = useState(false)
   const [messageText, setMessageText] = useState("")
   const [pendingAction, setPendingAction] = useState(null)
 
   const fetchStatus = useCallback(async () => {
-    console.log("Function FetchStatus Called")
     if (!contract) return
     try {
       setIsLoading(true)
-
       const [temp, statusValue, powerValue, modValue] = await Promise.all([
         contract.airconTemp(),
         contract.airconStatus(),
@@ -55,7 +51,7 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
 
   const sendTx = async (fnName, args, desc) => {
     if (!contract || !provider || !account) {
-      alert("연결 안 됨")
+      alert("지갑 연결 안 됨")
       return
     }
 
@@ -63,145 +59,165 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
       setIsLoading(true)
 
       let cost = 0n
-
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let i = 0; i < 3; i++) {
         try {
           cost = await contract.airconCost()
           break
-        } catch (error) {
-          console.warn(`airconCost 실패 (${attempt + 1}/3)`)
-          if (attempt === 2) {
-            // 마지막 시도 실패
-          } else {
-            await new Promise(r => setTimeout(r, 300))
+        } catch (e) {
+          console.warn(`airconCost 실패 (${i + 1}/3):`, e.message)
+          if (i === 2) {
+            cost = ethers.parseEther("0.001")
           }
+          await new Promise(r => setTimeout(r, 600))
         }
       }
 
-      const balance = await provider.getBalance(account)
-      const gasBuffer = ethers.parseEther("0.01")
+      // 2. 잔액 체크
+      let balance = 0n
+      try {
+        balance = await provider.getBalance(account)
+      } catch (e) {
+        balance = ethers.parseEther("0.1")
+      }
 
+      const gasBuffer = ethers.parseEther("0.01")
       if (balance < cost + gasBuffer) {
-        alert(`BNB 부족\n현재: ${ethers.formatEther(balance)} BNB\n필요: ${ethers.formatEther(cost + gasBuffer)} BNB`)
+        alert(`BNB가 부족합니다.\n현재: ${ethers.formatEther(balance).slice(0, 8)} BNB\n필요: ${ethers.formatEther(cost + gasBuffer).slice(0, 8)} BNB`)
         return
       }
 
-      let gasLimit = 500000n
+      let gasLimit = 800000n 
 
       try {
-        const estimated = await contract[fnName].estimateGas(...args, {
+        const estimated = await contract[fnName].estimateGas(args[0], args[1], {
           value: cost,
           from: account
         })
-        gasLimit = (estimated * 150n) / 100n
-      } catch (estimateError) {
-        console.warn("가스 추정 실패, 기본값 사용:", gasLimit.toString())
-
-        const errMsg = estimateError.message?.toLowerCase() || ""
-        if (errMsg.includes("revert") || errMsg.includes("execution reverted")) {
-          alert("컨트랙트가 거부했습니다.\n\n가능한 원인:\n- 이미 해당 상태입니다.\n- 확장 프로그램 / 애플리케이션이 실행중이지 않습니다.")
+        gasLimit = (estimated * 180n) / 100n
+      } catch (e) {
+        if (e.message.includes("revert") || e.message.includes("already") || e.message.includes("same")) {
+          alert("현재 상태에서는 불가능한 조작입니다")
           return
         }
       }
 
+      console.info("트랜잭션 전송:", { fnName, args, cost: cost.toString(), gasLimit: gasLimit.toString() })
+
       const tx = await contract[fnName](args[0], args[1], {
         value: cost,
-        gasLimit: gasLimit,
+        gasLimit,
       })
 
-      window.addPendingTx?.(tx.hash, desc, args[1] ?? null)
+      window.addPendingTx?.(tx.hash, desc, args[1] || null)
 
-      const receipt = await tx.wait()
+      let receipt = null
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          receipt = await Promise.race([
+            tx.wait(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("TX_TIMEOUT")), 60000))
+          ])
+          break
+        } catch (waitErr) {
+          if (waitErr.message === "TX_TIMEOUT" && attempt < 4) {
+            await new Promise(r => setTimeout(r, 5000))
+            continue
+          }
 
-      if (receipt.status === 1) {
-        setTimeout(fetchStatus, 1500)
-      } else {
-        alert("트랜잭션이 실패했습니다")
-      }
+          if (waitErr.code === -32603 || waitErr.message?.includes("network")) {
+            setTimeout(fetchStatus, 10000)
+            return
+          }
 
-    } catch (err) {
-      console.error("트랜잭션 실패:", err.message)
-
-      let errorMsg = "트랜잭션 실패"
-
-      if (err.code === 4001) {
-        errorMsg = "사용자가 취소했습니다"
-      } else if (err.code === "CALL_EXCEPTION") {
-        errorMsg = "컨트랙트 실행 실패\n조건을 확인하세요"
-      } else if (err.reason) {
-        errorMsg = err.reason
-      } else if (err.message) {
-        const msg = err.message
-        if (msg.includes("insufficient funds")) {
-          errorMsg = "잔액 부족"
-        } else if (msg.includes("user rejected")) {
-          errorMsg = "사용자 취소"
-        } else {
-          errorMsg = msg.slice(0, 100)
+          if (attempt === 4) throw waitErr
         }
       }
 
-      alert(errorMsg)
+      if (!receipt) {
+        setTimeout(fetchStatus, 10000)
+        return
+      }
+
+      if (receipt.status === 1) {
+        setTimeout(fetchStatus, 2000)
+      } else {
+        alert("트랜잭션 실패 - 중단됨")
+      }
+
+    } catch (err) {
+      console.error("sendTx 에러:", err)
+      let msg = "트랜잭션 실패"
+
+      if (err.code === 4001) {
+        msg = "사용자가 취소했습니다"
+      } else if (err.code === "INSUFFICIENT_FUNDS") {
+        msg = "BNB 부족"
+      } else if (err.code === -32603) {
+        msg = "네트워크 불안정\n잠시 후 다시 시도해주세요"
+      } else if (err.message?.includes("user rejected")) {
+        msg = "사용자가 취소했습니다"
+      } else if (err.reason) {
+        msg = err.reason
+      } else if (err.message) {
+        msg = err.message.slice(0, 100)
+      }
+
+      alert(msg)
     } finally {
+      setIsLoading(false)
       setShowMessageInput(false)
       setMessageText("")
       setPendingAction(null)
-      setIsLoading(false)
-      return;
     }
   }
 
-  // 메시지 입력 후 실제 트랜잭션 실행
   const executeWithMessage = async (message) => {
     setShowMessageInput(false)
     setMessageText("")
     const currentAction = pendingAction
     setPendingAction(null)
-
     if (!currentAction) return
+
     const { action } = currentAction
 
     switch (action) {
       case "turnOn":
-        await sendTx("changeAirconStatus", [1, message || "전원 ON"], "에어컨 켜기")
+        await sendTx("changeAirconStatus", [1, message || "ON"], "켜기")
         break
       case "turnOff":
-        await sendTx("changeAirconStatus", [0, message || "전원 OFF"], "에어컨 끄기")
+        await sendTx("changeAirconStatus", [0, message || "OFF"], "끄기")
         break
       case "increaseTemp":
-        await sendTx("changeAirconTemp", [0, message || "온도 증가"], "온도 +1")
+        await sendTx("changeAirconTemp", [0, message || "온도 증가"], "온도 증가")
         break
       case "decreaseTemp":
-        await sendTx("changeAirconTemp", [1, message || "온도 감소"], "온도 -1")
+        await sendTx("changeAirconTemp", [1, message || "온도 감소"], "온도 감소")
         break
       case "changeMode":
         const nextMode = mode === 0 ? 1 : 0
-        await sendTx("changeAirconMod", [nextMode, message || (nextMode === 1 ? "난방" : "냉방")], "모드 변경")
+        await sendTx("changeAirconMod", [nextMode, message || (nextMode === 1 ? "난방" : "냉방")], "모드")
         break
       case "changeFan":
         const nextPower = power >= 2 ? 0 : power + 1
-        await sendTx("changePower", [nextPower, message || `팬 ${["약", "중", "강"][nextPower]}`], `팬 속도 변경`)
+        const powerStr = ["weak", "medium", "strong"][nextPower]
+        await sendTx("changeAirconPower", [powerStr, message || `팬 ${["약", "중", "강"][nextPower]}`], "풍속")
         break
     }
   }
 
-  const controlAircon = async (action) => {
-    if (isLoading) {
+  const controlAircon = (action) => {
+    if (isLoading) return
+
+    if (action !== "turnOn" && status === 0) {
+      alert("에어컨을 먼저 켜주세요")
       return
     }
-
-    if (action !== "turnOn" && !status) {
-      alert("먼저 에어컨을 켜주세요")
-      return
-    }
-
     if (action === "turnOn" && status === 1) {
-      alert("에어컨이 이미 켜져 있습니다")
+      alert("이미 켜져 있습니다")
       return
     }
-
     if (action === "turnOff" && status === 0) {
-      alert("에어컨이 이미 꺼져 있습니다")
+      alert("이미 꺼져 있습니다")
       return
     }
 
@@ -210,29 +226,19 @@ export default function AirconRemote({ contract, account, className, onStatusUpd
   }
 
   useEffect(() => {
-    console.info("Status Change Detected! - A")
     fetchStatus()
-    const interval = setInterval(fetchStatus, 8000)
+    const interval = setInterval(fetchStatus, 9000)
     return () => clearInterval(interval)
   }, [fetchStatus])
 
   useEffect(() => {
-    console.info("Status Change Initialized! - B")
     if (!contract) return
-
-    const handler = () => {
-      console.info("Status Change Handler Called! - B")
-      fetchStatus()
-    }
-
+    const handler = () => fetchStatus()
     contract.on("ChangedAirconTemp", handler)
     contract.on("ChangeAirconPower", handler)
     contract.on("ChangeAirconMod", handler)
     contract.on("ChangeAirconStatus", handler)
-
-    return () => {
-      contract.removeAllListeners()
-    }
+    return () => contract.removeAllListeners()
   }, [contract, fetchStatus])
 
   useEffect(() => {

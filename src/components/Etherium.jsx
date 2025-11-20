@@ -140,22 +140,22 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
         )
 
         if (wsProvider) {
-          console.info("✅ WebSocket Provider 생성됨")
+          console.info("WebSocket Provider 생성됨")
 
           wsProvider.on("error", (error) => {
-            console.error("❌ WebSocket 에러:", error)
+            console.error("WebSocket 에러:", error)
             addAirconLog("WebSocket 연결 불안정", "error")
           })
 
           wsProvider.on("close", () => {
-            console.warn("⚠️ WebSocket 연결 끊김")
+            console.warn("WebSocket 연결 끊김")
           })
 
           // 연결 테스트
           wsProvider.getBlockNumber().then(blockNum => {
-            console.info("✅ WebSocket 연결 확인, 현재 블록:", blockNum)
+            console.info("WebSocket 연결 확인, 현재 블록:", blockNum)
           }).catch(err => {
-            console.error("❌ WebSocket 연결 실패:", err)
+            console.error("WebSocket 연결 실패:", err)
           })
         }
 
@@ -165,16 +165,11 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
       }
 
       if (ethProvider && eventContract) {
-        console.info("✅ 이벤트 리스너 등록 시작")
-
         eventContract.on("*", async (event) => {
           try {
-            console.info("📡 이벤트 감지:", event)
-
             const method = event.fragment.name;
             const txHash = event.log.transactionHash;
 
-            // 트랜잭션 발신자 주소 가져오기
             let txFrom = null;
             try {
               const tx = await ethProvider.getTransaction(txHash);
@@ -183,7 +178,6 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
               console.warn("트랜잭션 조회 실패:", e);
             }
 
-            // 내 트랜잭션이면 무시 (addPendingTx에서 이미 처리됨)
             if (txFrom && account && txFrom.toLowerCase() === account.toLowerCase()) {
               console.info("내 트랜잭션이므로 무시");
               return;
@@ -210,7 +204,7 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
               case 'ChangeAirconMod':
                 const modValue = Number(event.args[0]);
                 displayMessage = event.args[1];
-                action = modValue === 0 ? "냉방 모드로 변경" : "난방 모드로 변경";
+                action = modValue === 0 ? "난방 모드로 변경" : "냉방 모드로 변경";
                 setMode(modValue);
                 break;
 
@@ -225,9 +219,6 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
               default:
                 action = "알 수 없는 조작";
             }
-
-            console.info("처리된 이벤트:", { method, action, displayMessage, txFrom });
-
             addAirconLog(
               action,
               "other",
@@ -240,8 +231,6 @@ export default function Etherium({ setAccount, setSigner, setProvider, setContra
             console.error("이벤트 처리 실패:", error);
           }
         });
-
-        console.info("✅ 이벤트 리스너 등록 완료")
       }
 
       const writeContract = new ethers.Contract(
